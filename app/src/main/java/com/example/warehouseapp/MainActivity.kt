@@ -9,12 +9,19 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
@@ -83,13 +90,7 @@ fun WarehouseApp() {
     val navController = rememberNavController()
     val viewModel: WarehouseViewModel = viewModel()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Складское приложение") }
-            )
-        }
-    ) { paddingValues ->
+    Scaffold { paddingValues ->
         NavHost(
             navController = navController,
             startDestination = "main",
@@ -99,7 +100,9 @@ fun WarehouseApp() {
                 MainScreen(
                     onNavigateToReception = { navController.navigate("reception") },
                     onNavigateToShipment = { navController.navigate("shipment") },
-                    onNavigateToTasks = { navController.navigate("tasks") }
+                    onNavigateToTasks = { navController.navigate("tasks") },
+                    onNavigateToJournal = { navController.navigate("journal") },
+                    onNavigateToSettings = { navController.navigate("settings") }
                 )
             }
             composable("reception") {
@@ -111,48 +114,142 @@ fun WarehouseApp() {
             composable("tasks") {
                 TasksScreen(viewModel, navController)
             }
+            composable("journal") {
+                JournalScreen(viewModel, navController)
+            }
+            composable("settings") {
+                SettingsScreen(viewModel, navController)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainScreen(
+    onNavigateToReception: () -> Unit,
+    onNavigateToShipment: () -> Unit,
+    onNavigateToTasks: () -> Unit,
+    onNavigateToJournal: () -> Unit,
+    onNavigateToSettings: () -> Unit
+) {
+    val borderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+    val buttonBorder = BorderStroke(1.dp, borderColor)
+
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    Text(
+                        "Управление складом",
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                )
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.surface
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Логотип склада
+            Icon(
+                imageVector = Icons.Filled.Warehouse,
+                contentDescription = "Логотип приложения",
+                modifier = Modifier
+                    .size(160.dp)
+                    .padding(bottom = 48.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            // Основные кнопки
+            val buttonModifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+
+            MainScreenButton(
+                text = "Приемка продукции",
+                onClick = onNavigateToReception,
+                modifier = buttonModifier,
+                border = buttonBorder,
+                icon = Icons.Filled.Inventory
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            MainScreenButton(
+                text = "Комплектация заказа",
+                onClick = onNavigateToShipment,
+                modifier = buttonModifier,
+                border = buttonBorder,
+                icon = Icons.Filled.ShoppingCart
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            MainScreenButton(
+                text = "Журнал операций",
+                onClick = onNavigateToJournal,
+                modifier = buttonModifier,
+                border = buttonBorder,
+                icon = Icons.Filled.History
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            MainScreenButton(
+                text = "Настройки",
+                onClick = onNavigateToSettings,
+                modifier = buttonModifier,
+                border = buttonBorder,
+                icon = Icons.Filled.Settings
+            )
         }
     }
 }
 
 @Composable
-fun MainScreen(
-    onNavigateToReception: () -> Unit,
-    onNavigateToShipment: () -> Unit,
-    onNavigateToTasks: () -> Unit
+private fun MainScreenButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    border: BorderStroke? = null,
+    icon: ImageVector? = null,
+    enabled: Boolean = true
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = MaterialTheme.shapes.medium,
+        border = border,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+        ),
+        contentPadding = PaddingValues(horizontal = 24.dp)
     ) {
-        Button(
-            onClick = onNavigateToReception,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp)
-        ) {
-            Text("Приемка продукции")
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(Modifier.width(12.dp))
         }
-
-        Button(
-            onClick = onNavigateToShipment,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp)
-        ) {
-            Text("Комплектация и выдача")
-        }
-
-        Button(
-            onClick = onNavigateToTasks,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp)
-        ) {
-            Text("Задания")
-        }
+        Text(
+            text = text,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }

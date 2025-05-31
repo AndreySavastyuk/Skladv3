@@ -50,6 +50,12 @@ android {
 }
 
 dependencies {
+    // Локальные библиотеки из папки libs
+    implementation(files("libs/nlsblesdk.aar"))
+    implementation(files("libs/onsemi_blelibrary.jar"))
+    implementation(files("libs/onsemi_fotalibrary.jar"))
+    implementation(files("libs/printer-lib-3.2.0.aar"))
+
     // Core Android dependencies
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

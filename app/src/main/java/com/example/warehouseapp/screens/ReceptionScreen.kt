@@ -34,8 +34,8 @@ fun ReceptionScreen(
             val qrType = viewModel.processQRCode(scanResult)
             // Auto-fill product name based on QR type
             productName = when (qrType) {
-                QRCodeType.PART -> "Деталь: ${scanResult.removePrefix("PART:")}"
-                QRCodeType.ASSEMBLY -> "Сборка: ${scanResult.removePrefix("ASSEMBLY:")}"
+                //QRCodeType.PART -> "Деталь: ${scanResult.removePrefix("PART:")}"
+                //QRCodeType.ASSEMBLY -> "Сборка: ${scanResult.removePrefix("ASSEMBLY:")}"
                 else -> ""
             }
         }
@@ -69,7 +69,7 @@ fun ReceptionScreen(
                     modifier = Modifier.padding(16.dp)
                 ) {
                     Text("QR код: $scannedCode")
-                    Text("Тип: ${viewModel.processQRCode(scannedCode).name}")
+                    //Text("Тип: ${viewModel.processQRCode(scannedCode).name}")
                 }
             }
         }
@@ -110,8 +110,8 @@ fun ReceptionScreen(
                         quantity = quantity.toIntOrNull() ?: 0,
                         storageLocation = storageLocation,
                         type = when (viewModel.processQRCode(scannedCode)) {
-                            QRCodeType.PART -> ProductType.PART
-                            QRCodeType.ASSEMBLY -> ProductType.ASSEMBLY
+                            //QRCodeType.PART -> ProductType.PART
+                            //QRCodeType.ASSEMBLY -> ProductType.ASSEMBLY
                             else -> ProductType.PART
                         }
                     )

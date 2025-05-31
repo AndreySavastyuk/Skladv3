@@ -8,6 +8,8 @@ import kotlinx.coroutines.launch
 import com.example.warehouseapp.data.*
 import com.example.warehouseapp.network.NetworkManager
 import com.example.warehouseapp.database.WarehouseDatabase
+import com.example.warehouseapp.printer.XprinterAdapter
+import com.example.warehouseapp.scanner.NewlandScannerAdapter
 
 class WarehouseViewModel : ViewModel() {
     private val _products = MutableStateFlow<List<Product>>(emptyList())
@@ -22,12 +24,24 @@ class WarehouseViewModel : ViewModel() {
     private val _scanResult = MutableStateFlow<String>("")
     val scanResult: StateFlow<String> = _scanResult
 
+    private val _shipments = MutableStateFlow<List<Shipment>>(emptyList())
+    val shipments: StateFlow<List<Shipment>> = _shipments
+
     private lateinit var database: WarehouseDatabase
     private lateinit var networkManager: NetworkManager
+    private lateinit var printerAdapter: XprinterAdapter
+    private lateinit var scannerAdapter: NewlandScannerAdapter
 
-    fun initialize(database: WarehouseDatabase, networkManager: NetworkManager) {
+    fun initialize(
+        database: WarehouseDatabase,
+        networkManager: NetworkManager,
+        printerAdapter: XprinterAdapter,
+        scannerAdapter: NewlandScannerAdapter
+    ) {
         this.database = database
         this.networkManager = networkManager
+        this.printerAdapter = printerAdapter
+        this.scannerAdapter = scannerAdapter
         loadData()
     }
 
@@ -57,11 +71,32 @@ class WarehouseViewModel : ViewModel() {
         _scanResult.value = result
     }
 
-    fun processQRCode(qrCode: String): QRCodeType {
+    fun processQRCode(qrCode: String): ParsedQRData {
         return when {
-            qrCode.startsWith("PART:") -> QRCodeType.PART
-            qrCode.startsWith("ASSEMBLY:") -> QRCodeType.ASSEMBLY
-            else -> QRCodeType.UNKNOWN
+            qrCode.startsWith("PART:") -> ParsedQRData(
+                partNumber = qrCode.removePrefix("PART:"),
+                type = QRCodeType.PART
+            )
+            qrCode.startsWith("ASSEMBLY:") -> ParsedQRData(
+                partNumber = qrCode.removePrefix("ASSEMBLY:"),
+                type = QRCodeType.ASSEMBLY
+            )
+            qrCode.contains("=") -> {
+                // Формат: номер_маршрутки=номер_заказа=номер_детали=название_детали
+                val parts = qrCode.split("=")
+                if (parts.size == 4) {
+                    ParsedQRData(
+                        routeCard = parts[0],
+                        orderNumber = parts[1],
+                        partNumber = parts[2],
+                        partName = parts[3],
+                        type = QRCodeType.FIXED_FORMAT
+                    )
+                } else {
+                    ParsedQRData(type = QRCodeType.UNKNOWN)
+                }
+            }
+            else -> ParsedQRData(type = QRCodeType.UNKNOWN)
         }
     }
 
@@ -72,7 +107,10 @@ class WarehouseViewModel : ViewModel() {
     fun completeTaskItem(itemId: String, quantity: Int) {
         viewModelScope.launch {
             _currentTask.value?.let { task ->
-                val updatedItems = task.items.map { item ->
+                // Получаем items для задачи (нужно добавить в базу данных)
+                val items = getTaskItems(task.id)
+
+                val updatedItems = items.map { item ->
                     if (item.id == itemId) {
                         item.copy(
                             scannedQuantity = item.scannedQuantity + quantity,
@@ -83,16 +121,80 @@ class WarehouseViewModel : ViewModel() {
                     }
                 }
 
-                val updatedTask = task.copy(
-                    items = updatedItems,
-                    isCompleted = updatedItems.all { it.isCompleted }
-                )
+                // Проверяем, все ли items выполнены
+                val isTaskCompleted = updatedItems.all { it.isCompleted }
 
-                _currentTask.value = updatedTask
+                if (isTaskCompleted) {
+                    val updatedTask = task.copy(isCompleted = true)
+                    _currentTask.value = updatedTask
+                    networkManager.updateTask(updatedTask)
+                }
 
-                // Update task on server
-                networkManager.updateTask(updatedTask)
+                // Сохраняем информацию о выдаче
+                val taskItem = items.find { it.id == itemId }
+                taskItem?.let {
+                    val shipment = Shipment(
+                        id = java.util.UUID.randomUUID().toString(),
+                        taskId = task.id,
+                        productId = it.productId,
+                        productName = it.productName,
+                        quantity = quantity,
+                        storageLocation = it.storageLocation
+                    )
+                    saveShipment(shipment)
+                }
             }
         }
+    }
+
+    private suspend fun getTaskItems(taskId: String): List<TaskItem> {
+        // TODO: Загрузить из базы данных или сервера
+        return emptyList()
+    }
+
+    private suspend fun saveShipment(shipment: Shipment) {
+        // TODO: Сохранить в базу данных
+        _shipments.value = _shipments.value + shipment
+        //networkManager.sendShipmentToServer(shipment)
+    }
+
+    fun printReceptionLabel(product: Product) {
+        viewModelScope.launch {
+            val parsedData = processQRCode(product.qrCode)
+            val additionalInfo = mapOf(
+                "routeCard" to (parsedData.routeCard ?: ""),
+                "orderNumber" to (parsedData.orderNumber ?: ""),
+                "partNumber" to (parsedData.partNumber ?: ""),
+                "partName" to (parsedData.partName ?: product.name)
+            )
+
+            printerAdapter.printReceptionLabel(product, additionalInfo)
+        }
+    }
+
+    fun printShipmentLabel(item: TaskItem, quantity: Int) {
+        viewModelScope.launch {
+            printerAdapter.printPickingLabel(
+                itemName = item.productName,
+                quantity = quantity,
+                cellCode = item.storageLocation,
+                orderInfo = _currentTask.value?.name
+            )
+        }
+    }
+
+    // Методы для работы со сканером
+    fun connectToScanner(device: android.bluetooth.BluetoothDevice) {
+        viewModelScope.launch {
+            scannerAdapter.connect(device)
+        }
+    }
+
+    fun disconnectScanner() {
+        scannerAdapter.disconnect()
+    }
+
+    fun setScannerCallback(callback: (String) -> Unit) {
+        scannerAdapter.setScanCallback(callback)
     }
 }
