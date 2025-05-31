@@ -1,0 +1,49 @@
+# Исключения для экспорта на git
+
+# Системные и IDE-файлы
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Логи и временные файлы
+*.log
+*.tmp
+*.temp
+
+# Файлы сборки и кэша
+/build/
+/app/build/
+/.gradle/
+/local.properties
+/.DS_Store
+
+# Файлы ОС
+Thumbs.db
+Desktop.ini
+
+# Ключи и чувствительные данные
+*.keystore
+*.jks
+
+# Файлы, генерируемые Gradle Wrapper
+/gradle/wrapper/gradle-wrapper.jar
+/gradle/wrapper/gradle-wrapper.properties
+
+# Файлы, не используемые в проекте
+*.bak
+*.swp
+*.swo
+
+# Кэш Android Studio
+.cxx/
+.externalNativeBuild/
+
+# Файлы тестов и отчетов
+/build/
+/app/build/
+/reports/
+
+# Исключить README.md из игнорирования
+!README.md
+
