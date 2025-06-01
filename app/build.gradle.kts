@@ -107,6 +107,8 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+     // Для hiltViewModel()
+    implementation("androidx.hilt:hilt-navigation-compose:1.0.0")
 
     implementation("com.squareup.retrofit2:retrofit:2.9.0") // Или более новая версия
     implementation("com.squareup.retrofit2:converter-gson:2.9.0") // Если используете Gson

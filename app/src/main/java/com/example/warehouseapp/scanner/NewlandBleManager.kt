@@ -4,6 +4,8 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.nlscan.ble.NlsBleManager
 import com.nlscan.ble.NlsBleDevice
@@ -28,6 +30,7 @@ class NewlandBleManager @Inject constructor(
 
     // Экземпляр SDK менеджера
     private val bleManager = NlsBleManager.getInstance()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Состояние подключения
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
@@ -89,32 +92,39 @@ class NewlandBleManager @Inject constructor(
     }
 
     init {
-        // SDK должен быть инициализирован в Application классе
-        // Проверяем, что SDK инициализирован
-        try {
-            // Регистрируем наблюдателя только если SDK готов
-            bleManager.registerBleEventObserver(bleObserver)
-            isObserverRegistered = true
-            Log.d(TAG, "BLE наблюдатель зарегистрирован")
-        } catch (e: Exception) {
-            Log.e(TAG, "Ошибка регистрации наблюдателя: ${e.message}")
-            isObserverRegistered = false
-        }
+        // Регистрируем наблюдателя после небольшой задержки
+        mainHandler.postDelayed({
+            try {
+                bleManager.registerBleEventObserver(bleObserver)
+                isObserverRegistered = true
+                Log.d(TAG, "BLE наблюдатель зарегистрирован")
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка регистрации наблюдателя: ${e.message}")
+                isObserverRegistered = false
+            }
+        }, 100)
     }
 
     /**
      * Генерация QR кода для сопряжения (Fine scan to connect)
-     * Исправлено: используем лямбду вместо интерфейса callback
+     * Исправлено: обертываем в Handler для выполнения в главном потоке
      */
     fun generatePairingQrCode() {
-        bleManager.generateConnectCodeBitmap { bitmap: Bitmap? ->
-            if (bitmap != null) {
-                _pairingQrCode.value = bitmap
-                // Запускаем режим сопряжения
-                bleManager.startFineScanToConnect()
-                Log.i(TAG, "QR код для сопряжения создан успешно")
-            } else {
-                Log.e(TAG, "Не удалось создать QR код для сопряжения")
+        mainHandler.post {
+            try {
+                bleManager.generateConnectCodeBitmap { bitmap: Bitmap? ->
+                    if (bitmap != null) {
+                        _pairingQrCode.value = bitmap
+                        // Запускаем режим сопряжения
+                        bleManager.startFineScanToConnect()
+                        Log.i(TAG, "QR код для сопряжения создан успешно")
+                    } else {
+                        Log.e(TAG, "Не удалось создать QR код для сопряжения")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при генерации QR кода: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
@@ -123,27 +133,28 @@ class NewlandBleManager @Inject constructor(
      * Остановка режима сопряжения
      */
     fun stopPairing() {
-        bleManager.stopFineScanToConnect()
-        _pairingQrCode.value = null
-        Log.d(TAG, "Режим сопряжения остановлен")
+        mainHandler.post {
+            try {
+                bleManager.stopFineScanToConnect()
+                _pairingQrCode.value = null
+                Log.d(TAG, "Режим сопряжения остановлен")
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при остановке сопряжения: ${e.message}")
+            }
+        }
     }
 
     /**
      * Ручное подключение к сканеру по MAC адресу
-     * Исправлено: проверяем правильное название метода в SDK
      */
     fun connectToScanner(macAddress: String) {
-        _connectionState.value = ConnectionState.CONNECTING
-        try {
-            // Попробуем разные варианты названий метода
-            bleManager.connect(macAddress)
-            Log.d(TAG, "Подключение к устройству: $macAddress")
-        } catch (e: NoSuchMethodError) {
-            Log.e(TAG, "Метод connectDevice не найден, пробуем connect")
+        mainHandler.post {
+            _connectionState.value = ConnectionState.CONNECTING
             try {
                 bleManager.connect(macAddress)
-            } catch (e2: Exception) {
-                Log.e(TAG, "Ошибка подключения: ${e2.message}")
+                Log.d(TAG, "Подключение к устройству: $macAddress")
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка подключения: ${e.message}")
                 _connectionState.value = ConnectionState.DISCONNECTED
             }
         }
@@ -151,23 +162,23 @@ class NewlandBleManager @Inject constructor(
 
     /**
      * Отключение от сканера
-     * Исправлено: убран несуществующий метод disconnect()
      */
     fun disconnect() {
-        try {
-            bleManager.stopScan()
-            bleManager.stopFineScanToConnect()
-            currentDevice = null
-            _connectionState.value = ConnectionState.DISCONNECTED
-            Log.d(TAG, "Отключено от сканера")
-        } catch (e: Exception) {
-            Log.e(TAG, "Ошибка при отключении: ${e.message}")
+        mainHandler.post {
+            try {
+                bleManager.stopScan()
+                bleManager.stopFineScanToConnect()
+                currentDevice = null
+                _connectionState.value = ConnectionState.DISCONNECTED
+                Log.d(TAG, "Отключено от сканера")
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при отключении: ${e.message}")
+            }
         }
     }
 
     /**
      * Поиск доступных BLE сканеров
-     * Примечание: возвращает только спаренные устройства
      */
     fun searchDevices(): List<BluetoothDevice> {
         val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter() ?: return emptyList()
@@ -198,16 +209,28 @@ class NewlandBleManager @Inject constructor(
      * Активное BLE сканирование новых устройств
      */
     fun startBleDiscovery() {
-        bleManager.startScan()
-        Log.d(TAG, "Начато BLE сканирование")
+        mainHandler.post {
+            try {
+                bleManager.startScan()
+                Log.d(TAG, "Начато BLE сканирование")
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при запуске сканирования: ${e.message}")
+            }
+        }
     }
 
     /**
      * Остановка BLE сканирования
      */
     fun stopBleDiscovery() {
-        bleManager.stopScan()
-        Log.d(TAG, "BLE сканирование остановлено")
+        mainHandler.post {
+            try {
+                bleManager.stopScan()
+                Log.d(TAG, "BLE сканирование остановлено")
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при остановке сканирования: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -221,22 +244,40 @@ class NewlandBleManager @Inject constructor(
      * Запрос уровня заряда батареи
      */
     fun queryBatteryLevel() {
-        bleManager.queryBatteryLevel()
+        mainHandler.post {
+            try {
+                bleManager.queryBatteryLevel()
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при запросе уровня батареи: ${e.message}")
+            }
+        }
     }
 
     /**
      * Звуковой сигнал
      */
     fun beep(frequency: Int = 2700, duration: Long = 100, volume: Int = 10) {
-        bleManager.beep(frequency, duration, volume)
+        mainHandler.post {
+            try {
+                bleManager.beep(frequency, duration, volume)
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при звуковом сигнале: ${e.message}")
+            }
+        }
     }
 
     /**
      * Вибрация (для BS30, BS50)
      */
     fun vibrate(duration: Long = 100) {
-        if (duration in 50..3000) {
-            bleManager.vibrate(duration)
+        mainHandler.post {
+            if (duration in 50..3000) {
+                try {
+                    bleManager.vibrate(duration)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Ошибка при вибрации: ${e.message}")
+                }
+            }
         }
     }
 
@@ -244,23 +285,30 @@ class NewlandBleManager @Inject constructor(
      * Звук и вибрация одновременно
      */
     fun beepAndVibrate() {
-        bleManager.beepAndVibrate(2700, 100, 10, 100)
+        mainHandler.post {
+            try {
+                bleManager.beepAndVibrate(2700, 100, 10, 100)
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при звуке и вибрации: ${e.message}")
+            }
+        }
     }
 
     /**
      * Очистка ресурсов
-     * Исправлено: правильный порядок вызовов
      */
     fun release() {
-        try {
-            disconnect()
-            if (isObserverRegistered) {
-                bleManager.unregisterBleEventObserver(bleObserver)
-                isObserverRegistered = false
-                Log.d(TAG, "BLE наблюдатель отписан")
+        mainHandler.post {
+            try {
+                disconnect()
+                if (isObserverRegistered) {
+                    bleManager.unregisterBleEventObserver(bleObserver)
+                    isObserverRegistered = false
+                    Log.d(TAG, "BLE наблюдатель отписан")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка при освобождении ресурсов: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Ошибка при освобождении ресурсов: ${e.message}")
         }
     }
 

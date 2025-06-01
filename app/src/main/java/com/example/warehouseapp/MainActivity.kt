@@ -1,10 +1,6 @@
 package com.example.warehouseapp
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -17,75 +13,41 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.app.ActivityCompat
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.warehouseapp.ui.theme.WarehouseAppTheme
 import com.example.warehouseapp.viewmodel.WarehouseViewModel
 import com.example.warehouseapp.screens.*
-import com.example.warehouseapp.data.*
-import com.example.warehouseapp.network.*
-import com.example.warehouseapp.printer.*
-import androidx.room.Room
-import com.example.warehouseapp.database.WarehouseDatabase
-import com.example.warehouseapp.scanner.BluetoothQRScanner
-import com.example.warehouseapp.scanner.CameraQRScanner
-import com.example.warehouseapp.scanner.NewlandBleManager
 import com.example.warehouseapp.ui.icons.Warehouse
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    private lateinit var bluetoothAdapter: BluetoothAdapter
-    private lateinit var cameraScanner: CameraQRScanner
-    private lateinit var bluetoothScanner: BluetoothQRScanner
-    private lateinit var printerManager: PrinterManager
-    private lateinit var networkManager: NetworkManager
-    private lateinit var database: WarehouseDatabase
-    private lateinit var newlandBleManager: NewlandBleManager
 
-    private val requestBluetoothPermission = registerForActivityResult(
+    private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        // Handle permissions result
+        // Обработка результатов разрешений
+        permissions.entries.forEach {
+            println("${it.key} = ${it.value}")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize components
-        bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        cameraScanner = CameraQRScanner(this)
-        bluetoothScanner = BluetoothQRScanner(this)
-        printerManager = PrinterManager(this)
-        networkManager = NetworkManager(this)
-
-        // Используем NewlandBleManager вместо NewlandScannerAdapter
-        newlandBleManager = NewlandBleManager(this)
-
-        // Initialize database
-        database = Room.databaseBuilder(
-            applicationContext,
-            WarehouseDatabase::class.java,
-            "warehouse_database"
-        ).build()
-
-        // Request permissions
+        // Запрашиваем разрешения
         requestPermissions()
 
         setContent {
             WarehouseAppTheme {
-                WarehouseApp(
-                    database = database,
-                    networkManager = networkManager,
-                    printerManager = printerManager,
-                    scannerManager = newlandBleManager
-                )
+                WarehouseApp()
             }
         }
     }
@@ -102,31 +64,14 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.ACCESS_WIFI_STATE
         )
 
-        requestBluetoothPermission.launch(permissions)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        // Освобождаем ресурсы
-        newlandBleManager.release()
+        requestPermissionLauncher.launch(permissions)
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WarehouseApp(
-    database: WarehouseDatabase,
-    networkManager: NetworkManager,
-    printerManager: PrinterManager,
-    scannerManager: NewlandBleManager
-) {
+fun WarehouseApp() {
     val navController = rememberNavController()
-    val viewModel: WarehouseViewModel = viewModel()
-
-    // Initialize ViewModel with dependencies
-    LaunchedEffect(Unit) {
-        viewModel.initialize(database, networkManager, printerManager, scannerManager)
-    }
 
     Scaffold { paddingValues ->
         NavHost(
@@ -144,18 +89,23 @@ fun WarehouseApp(
                 )
             }
             composable("reception") {
+                val viewModel: WarehouseViewModel = hiltViewModel()
                 ReceptionScreen(viewModel, navController)
             }
             composable("shipment") {
+                val viewModel: WarehouseViewModel = hiltViewModel()
                 ShipmentScreen(viewModel, navController)
             }
             composable("tasks") {
+                val viewModel: WarehouseViewModel = hiltViewModel()
                 TasksScreen(viewModel, navController)
             }
             composable("journal") {
+                val viewModel: WarehouseViewModel = hiltViewModel()
                 JournalScreen(viewModel, navController)
             }
             composable("settings") {
+                val viewModel: WarehouseViewModel = hiltViewModel()
                 SettingsScreen(viewModel, navController)
             }
         }
