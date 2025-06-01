@@ -6,6 +6,10 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import java.util.*
 
 /**
@@ -42,16 +46,55 @@ class NewlandScannerAdapter(private val context: Context) {
         CONNECTED,
         ERROR
     }
+    private fun checkBluetoothPermissions(): Boolean {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.BLUETOOTH
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val hasAdminPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.BLUETOOTH_ADMIN
+        ) == PackageManager.PERMISSION_GRANTED
+
+        // Для Android 12+ (API 31+) требуются дополнительные разрешения
+        val hasConnectPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+
+        return hasPermission && hasAdminPermission && hasConnectPermission
+    }
 
     /**
      * Поиск доступных BLE сканеров
      */
     fun searchDevices(): List<BluetoothDevice> {
-        return bluetoothAdapter?.bondedDevices?.filter { device ->
-            device.name?.contains("Newland", ignoreCase = true) == true ||
-                    device.name?.contains("HR32", ignoreCase = true) == true ||
-                    device.name?.contains("MT90", ignoreCase = true) == true
-        }?.toList() ?: emptyList()
+        if (!checkBluetoothPermissions()) {
+            Log.e(TAG, "Нет необходимых разрешений для Bluetooth")
+            return emptyList()
+        }
+
+        return try {
+            bluetoothAdapter?.bondedDevices?.filter { device ->
+                try {
+                    val deviceName = device.name ?: ""
+                    deviceName.contains("Newland", ignoreCase = true) ||
+                            deviceName.contains("HR32", ignoreCase = true) ||
+                            deviceName.contains("MT90", ignoreCase = true)
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Ошибка доступа к имени устройства", e)
+                    false
+                }
+            }?.toList() ?: emptyList()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Ошибка доступа к списку спаренных устройств", e)
+            emptyList()
+        }
     }
 
     /**
@@ -61,15 +104,23 @@ class NewlandScannerAdapter(private val context: Context) {
         try {
             _connectionState.value = BleConnectionState.CONNECTING
 
-            // TODO: Использовать nlsblesdk для подключения
-            // nlsScanner = NlsScanner.getInstance()
-            // nlsScanner.connect(device.address)
+            if (!checkBluetoothPermissions()) {
+                Log.e(TAG, "Нет необходимых разрешений для Bluetooth")
+                _connectionState.value = BleConnectionState.ERROR
+                return false
+            }
 
-            Log.i(TAG, "Подключение к ${device.name} (${device.address})")
+            // Безопасно получаем имя устройства
+            val deviceName = try {
+                device.name ?: "Unknown device"
+            } catch (e: SecurityException) {
+                "Unknown device"
+            }
+
+            Log.i(TAG, "Подключение к $deviceName (${device.address})")
 
             // Временная заглушка
             _connectionState.value = BleConnectionState.CONNECTED
-
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка подключения", e)
@@ -77,6 +128,7 @@ class NewlandScannerAdapter(private val context: Context) {
             return false
         }
     }
+
 
     /**
      * Отключение от сканера

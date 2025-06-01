@@ -1,5 +1,7 @@
 package com.example.warehouseapp.viewmodel
 
+import android.bluetooth.BluetoothDevice
+import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -8,11 +10,11 @@ import kotlinx.coroutines.launch
 import com.example.warehouseapp.data.*
 import com.example.warehouseapp.network.NetworkManager
 import com.example.warehouseapp.database.WarehouseDatabase
-import com.example.warehouseapp.printer.XprinterAdapter
-import com.example.warehouseapp.scanner.NewlandScannerAdapter
 import com.example.warehouseapp.printer.ConnectionState
 import com.example.warehouseapp.printer.PrintingState
 import com.example.warehouseapp.printer.PrinterManager
+import com.example.warehouseapp.scanner.NewlandBleManager
+import java.util.*
 
 class WarehouseViewModel : ViewModel() {
     private val _products = MutableStateFlow<List<Product>>(emptyList())
@@ -34,21 +36,31 @@ class WarehouseViewModel : ViewModel() {
     private val _printingState = MutableStateFlow(PrintingState.IDLE)
     val printingState: StateFlow<PrintingState> = _printingState
 
+    // Состояния сканера
+    private val _scannerConnectionState = MutableStateFlow(NewlandBleManager.ConnectionState.DISCONNECTED)
+    val scannerConnectionState: StateFlow<NewlandBleManager.ConnectionState> = _scannerConnectionState
+
+    private val _scannerPairingQrCode = MutableStateFlow<Bitmap?>(null)
+    val scannerPairingQrCode: StateFlow<Bitmap?> = _scannerPairingQrCode
+
+    // Mock данные для заданий (временно)
+    private val _taskItems = MutableStateFlow<Map<String, List<TaskItem>>>(emptyMap())
+
     private lateinit var database: WarehouseDatabase
     private lateinit var networkManager: NetworkManager
     private lateinit var printerManager: PrinterManager
-    private lateinit var scannerAdapter: NewlandScannerAdapter
+    private lateinit var scannerManager: NewlandBleManager
 
     fun initialize(
         database: WarehouseDatabase,
         networkManager: NetworkManager,
         printerManager: PrinterManager,
-        scannerAdapter: NewlandScannerAdapter
+        scannerManager: NewlandBleManager
     ) {
         this.database = database
         this.networkManager = networkManager
         this.printerManager = printerManager
-        this.scannerAdapter = scannerAdapter
+        this.scannerManager = scannerManager
 
         // Подписываемся на состояния принтера
         viewModelScope.launch {
@@ -63,28 +75,116 @@ class WarehouseViewModel : ViewModel() {
             }
         }
 
-        loadData()
-    }
-
-    private fun loadData() {
+        // Подписываемся на состояния сканера
         viewModelScope.launch {
-            // Load products from database
-            database.productDao().getAllProducts().collect { productList ->
-                _products.value = productList
+            scannerManager.connectionState.collect { state ->
+                _scannerConnectionState.value = state
             }
         }
 
         viewModelScope.launch {
-            // Load tasks from network
-            val tasksFromServer = networkManager.fetchTasks()
-            _tasks.value = tasksFromServer
+            scannerManager.pairingQrCode.collect { qrCode ->
+                _scannerPairingQrCode.value = qrCode
+            }
         }
+
+        viewModelScope.launch {
+            scannerManager.scanResult.collect { result ->
+                if (result.isNotEmpty()) {
+                    _scanResult.value = result
+                }
+            }
+        }
+
+        // Устанавливаем callback для сканера
+        scannerManager.setScanCallback { result ->
+            _scanResult.value = result
+        }
+
+        loadData()
+        loadMockTasks()
+    }
+
+    private fun loadData() {
+        viewModelScope.launch {
+            // Загружаем продукты из базы данных
+            database.productDao().getAllProducts().collect { productList ->
+                _products.value = productList
+            }
+        }
+    }
+
+    private fun loadMockTasks() {
+        // Временные данные для тестирования
+        val mockTasks = listOf(
+            Task(
+                id = "task1",
+                name = "Заказ #001 - Сборка корпусов",
+                createdDate = Date(),
+                isCompleted = false,
+                isPaused = false,
+                isSynced = false
+            ),
+            Task(
+                id = "task2",
+                name = "Заказ #002 - Комплектация деталей",
+                createdDate = Date(),
+                isCompleted = false,
+                isPaused = true,
+                isSynced = false
+            )
+        )
+        _tasks.value = mockTasks
+
+        // Mock элементы заданий
+        val mockItems = mapOf(
+            "task1" to listOf(
+                TaskItem(
+                    id = "item1",
+                    taskId = "task1",
+                    productId = "ДЕТ-456",
+                    productName = "Корпус алюминиевый",
+                    storageLocation = "A1B2",
+                    requiredQuantity = 5,
+                    scannedQuantity = 0,
+                    isCompleted = false
+                ),
+                TaskItem(
+                    id = "item2",
+                    taskId = "task1",
+                    productId = "ДЕТ-789",
+                    productName = "Крышка пластиковая",
+                    storageLocation = "B2C3",
+                    requiredQuantity = 5,
+                    scannedQuantity = 2,
+                    isCompleted = false
+                )
+            ),
+            "task2" to listOf(
+                TaskItem(
+                    id = "item3",
+                    taskId = "task2",
+                    productId = "СБ-123",
+                    productName = "Блок питания",
+                    storageLocation = "C3D4",
+                    requiredQuantity = 2,
+                    scannedQuantity = 0,
+                    isCompleted = false
+                )
+            )
+        )
+        _taskItems.value = mockItems
     }
 
     fun addProduct(product: Product) {
         viewModelScope.launch {
             database.productDao().insertProduct(product)
-            networkManager.sendProductToServer(product)
+            // Отправляем на сервер в фоне
+            try {
+                networkManager.sendProductToServer(product)
+            } catch (e: Exception) {
+                // Обработка ошибок сети
+            }
         }
     }
 
@@ -92,7 +192,7 @@ class WarehouseViewModel : ViewModel() {
         _scanResult.value = result
     }
 
-    fun processQRCode(qrCode: String): ParsedQRData {
+    fun parseQRCode(qrCode: String): ParsedQRData {
         return when {
             qrCode.startsWith("PART:") -> ParsedQRData(
                 partNumber = qrCode.removePrefix("PART:"),
@@ -128,19 +228,21 @@ class WarehouseViewModel : ViewModel() {
     fun completeTaskItem(itemId: String, quantity: Int) {
         viewModelScope.launch {
             _currentTask.value?.let { task ->
-                // Получаем items для задачи (нужно добавить в базу данных)
-                val items = getTaskItems(task.id)
+                val items = _taskItems.value[task.id] ?: return@let
 
                 val updatedItems = items.map { item ->
                     if (item.id == itemId) {
+                        val newScannedQuantity = (item.scannedQuantity + quantity).coerceAtMost(item.requiredQuantity)
                         item.copy(
-                            scannedQuantity = item.scannedQuantity + quantity,
-                            isCompleted = (item.scannedQuantity + quantity) >= item.requiredQuantity
+                            scannedQuantity = newScannedQuantity,
+                            isCompleted = newScannedQuantity >= item.requiredQuantity
                         )
                     } else {
                         item
                     }
                 }
+
+                _taskItems.value = _taskItems.value + (task.id to updatedItems)
 
                 // Проверяем, все ли items выполнены
                 val isTaskCompleted = updatedItems.all { it.isCompleted }
@@ -148,37 +250,59 @@ class WarehouseViewModel : ViewModel() {
                 if (isTaskCompleted) {
                     val updatedTask = task.copy(isCompleted = true)
                     _currentTask.value = updatedTask
-                    networkManager.updateTask(updatedTask)
+                    _tasks.value = _tasks.value.map {
+                        if (it.id == task.id) updatedTask else it
+                    }
+                    // Отправляем на сервер
+                    try {
+                        networkManager.updateTask(updatedTask)
+                    } catch (e: Exception) {
+                        // Обработка ошибок
+                    }
                 }
 
                 // Сохраняем информацию о выдаче
                 val taskItem = items.find { it.id == itemId }
                 taskItem?.let {
                     val shipment = Shipment(
-                        id = java.util.UUID.randomUUID().toString(),
+                        id = UUID.randomUUID().toString(),
                         taskId = task.id,
                         productId = it.productId,
                         productName = it.productName,
                         quantity = quantity,
                         storageLocation = it.storageLocation
                     )
-                    saveShipment(shipment)
+                    // TODO: Сохранить в базу данных
                 }
             }
         }
     }
 
-    private suspend fun getTaskItems(taskId: String): List<TaskItem> {
-        // TODO: Загрузить из базы данных или сервера
-        return emptyList()
+    fun getTaskItems(taskId: String): List<TaskItem> {
+        return _taskItems.value[taskId] ?: emptyList()
     }
 
-    private suspend fun saveShipment(shipment: Shipment) {
-        // TODO: Сохранить в базу данных
-        //_shipments.value = _shipments.value + shipment
-        //networkManager.sendShipmentToServer(shipment)
+    fun pauseTask(taskId: String) {
+        _tasks.value = _tasks.value.map { task ->
+            if (task.id == taskId) {
+                task.copy(isPaused = true)
+            } else {
+                task
+            }
+        }
     }
 
+    fun resumeTask(taskId: String) {
+        _tasks.value = _tasks.value.map { task ->
+            if (task.id == taskId) {
+                task.copy(isPaused = false)
+            } else {
+                task
+            }
+        }
+    }
+
+    // Методы принтера
     suspend fun printReceptionLabel(product: Product): Boolean {
         return printerManager.printLabel(product)
     }
@@ -195,18 +319,42 @@ class WarehouseViewModel : ViewModel() {
         return printerManager.printTest()
     }
 
-    // Методы для работы со сканером
-    fun connectToScanner(device: android.bluetooth.BluetoothDevice) {
-        viewModelScope.launch {
-            scannerAdapter.connect(device)
-        }
+    // Методы сканера
+    fun startScannerPairing() {
+        scannerManager.generatePairingQrCode()
+    }
+
+    fun stopScannerPairing() {
+        scannerManager.stopPairing()
+    }
+
+    suspend fun connectToScanner(device: BluetoothDevice) {
+        scannerManager.connectToScanner(device.address)
     }
 
     fun disconnectScanner() {
-        scannerAdapter.disconnect()
+        scannerManager.disconnect()
     }
 
-    fun setScannerCallback(callback: (String) -> Unit) {
-        scannerAdapter.setScanCallback(callback)
+    fun scannerBeep() {
+        scannerManager.beep(frequency = 2700, duration = 100, volume = 10)
+    }
+
+    fun scannerBeepError() {
+        // Двойной сигнал для ошибки
+        viewModelScope.launch {
+            scannerManager.beep(frequency = 1000, duration = 100, volume = 15)
+            kotlinx.coroutines.delay(150)
+            scannerManager.beep(frequency = 1000, duration = 100, volume = 15)
+        }
+    }
+
+    fun scannerVibrate() {
+        scannerManager.vibrate(100)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        scannerManager.release()
     }
 }

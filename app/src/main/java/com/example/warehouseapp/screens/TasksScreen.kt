@@ -17,6 +17,7 @@ import com.example.warehouseapp.data.Task
 import java.text.SimpleDateFormat
 import java.util.Locale
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.launch
 
 @Composable
 fun TasksScreen(
@@ -25,6 +26,7 @@ fun TasksScreen(
 ) {
     val tasks by viewModel.tasks.collectAsState()
     var showRefreshDialog by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -44,7 +46,12 @@ fun TasksScreen(
             )
 
             IconButton(
-                onClick = { showRefreshDialog = true }
+                onClick = {
+                    scope.launch {
+                        // Здесь можно добавить обновление заданий с сервера
+                        showRefreshDialog = true
+                    }
+                }
             ) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
@@ -88,6 +95,7 @@ fun TasksScreen(
                 items(tasks) { task ->
                     TaskCard(
                         task = task,
+                        viewModel = viewModel,
                         onTaskClick = {
                             viewModel.selectTask(task)
                             navController.navigate("shipment")
@@ -115,7 +123,6 @@ fun TasksScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        // Refresh tasks
                         showRefreshDialog = false
                     }
                 ) {
@@ -130,9 +137,15 @@ fun TasksScreen(
 @Composable
 fun TaskCard(
     task: Task,
+    viewModel: WarehouseViewModel,
     onTaskClick: () -> Unit
 ) {
     val dateFormat = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+
+    // Получаем элементы задания через ViewModel
+    val taskItems = viewModel.getTaskItems(task.id)
+    val completedItems = taskItems.count { it.isCompleted }
+    val totalItems = taskItems.size
 
     Card(
         onClick = onTaskClick,
@@ -213,32 +226,113 @@ fun TaskCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             // Progress
-            val completedItems = task.items.count { it.isCompleted }
-            val totalItems = task.items.size
+            if (totalItems > 0) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LinearProgressIndicator(
+                        progress = {
+                            if (totalItems > 0) {
+                                completedItems.toFloat() / totalItems.toFloat()
+                            } else {
+                                0f
+                            }
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(8.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "$completedItems/$totalItems",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                LinearProgressIndicator(
-                    progress = { completedItems.toFloat() / totalItems.toFloat() },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(8.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "$completedItems/$totalItems",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
             // Items preview
-            Text(
-                text = "Позиций: ${task.items.size}",
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Позиций: $totalItems",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                if (totalItems > 0 && completedItems < totalItems) {
+                    Text(
+                        text = "Осталось: ${totalItems - completedItems}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Показываем первые несколько позиций
+            if (taskItems.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp)
+                    ) {
+                        taskItems.take(3).forEach { item ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (item.isCompleted)
+                                            Icons.Default.CheckCircle
+                                        else
+                                            Icons.Default.Circle,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (item.isCompleted)
+                                            Color(0xFF4CAF50)
+                                        else
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = item.productName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                Text(
+                                    text = "${item.scannedQuantity}/${item.requiredQuantity}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        if (taskItems.size > 3) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "... и еще ${taskItems.size - 3}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

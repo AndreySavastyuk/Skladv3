@@ -37,7 +37,8 @@ import androidx.room.Room
 import com.example.warehouseapp.database.WarehouseDatabase
 import com.example.warehouseapp.scanner.BluetoothQRScanner
 import com.example.warehouseapp.scanner.CameraQRScanner
-import com.example.warehouseapp.scanner.NewlandScannerAdapter
+import com.example.warehouseapp.scanner.NewlandBleManager
+import com.example.warehouseapp.ui.icons.Warehouse
 
 class MainActivity : ComponentActivity() {
     private lateinit var bluetoothAdapter: BluetoothAdapter
@@ -46,7 +47,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var printerManager: PrinterManager
     private lateinit var networkManager: NetworkManager
     private lateinit var database: WarehouseDatabase
-    private lateinit var newlandScanner: NewlandScannerAdapter
+    private lateinit var newlandBleManager: NewlandBleManager
 
     private val requestBluetoothPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -63,7 +64,9 @@ class MainActivity : ComponentActivity() {
         bluetoothScanner = BluetoothQRScanner(this)
         printerManager = PrinterManager(this)
         networkManager = NetworkManager(this)
-        newlandScanner = NewlandScannerAdapter(this)
+
+        // Используем NewlandBleManager вместо NewlandScannerAdapter
+        newlandBleManager = NewlandBleManager(this)
 
         // Initialize database
         database = Room.databaseBuilder(
@@ -81,7 +84,7 @@ class MainActivity : ComponentActivity() {
                     database = database,
                     networkManager = networkManager,
                     printerManager = printerManager,
-                    scannerAdapter = newlandScanner
+                    scannerManager = newlandBleManager
                 )
             }
         }
@@ -101,6 +104,12 @@ class MainActivity : ComponentActivity() {
 
         requestBluetoothPermission.launch(permissions)
     }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Освобождаем ресурсы
+        newlandBleManager.release()
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,14 +118,14 @@ fun WarehouseApp(
     database: WarehouseDatabase,
     networkManager: NetworkManager,
     printerManager: PrinterManager,
-    scannerAdapter: NewlandScannerAdapter
+    scannerManager: NewlandBleManager
 ) {
     val navController = rememberNavController()
     val viewModel: WarehouseViewModel = viewModel()
 
     // Initialize ViewModel with dependencies
     LaunchedEffect(Unit) {
-        viewModel.initialize(database, networkManager, printerManager, scannerAdapter)
+        viewModel.initialize(database, networkManager, printerManager, scannerManager)
     }
 
     Scaffold { paddingValues ->

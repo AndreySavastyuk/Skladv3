@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.kapt)
+    alias(libs.plugins.hilt.android)
 }
 
 android {
@@ -65,6 +66,10 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.bundles.compose)
 
+    // Добавьте зависимости Hilt
+    implementation("com.google.dagger:hilt-android:2.47")
+    kapt("com.google.dagger:hilt-compiler:2.47")
+
     // Navigation
     implementation(libs.androidx.navigation.compose)
 
@@ -102,4 +107,8 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    implementation("com.squareup.retrofit2:retrofit:2.9.0") // Или более новая версия
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0") // Если используете Gson
+
 }
