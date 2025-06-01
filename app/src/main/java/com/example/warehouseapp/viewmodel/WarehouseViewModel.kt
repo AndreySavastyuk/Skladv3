@@ -10,6 +10,9 @@ import com.example.warehouseapp.network.NetworkManager
 import com.example.warehouseapp.database.WarehouseDatabase
 import com.example.warehouseapp.printer.XprinterAdapter
 import com.example.warehouseapp.scanner.NewlandScannerAdapter
+import com.example.warehouseapp.printer.ConnectionState
+import com.example.warehouseapp.printer.PrintingState
+import com.example.warehouseapp.printer.PrinterManager
 
 class WarehouseViewModel : ViewModel() {
     private val _products = MutableStateFlow<List<Product>>(emptyList())
@@ -24,24 +27,42 @@ class WarehouseViewModel : ViewModel() {
     private val _scanResult = MutableStateFlow<String>("")
     val scanResult: StateFlow<String> = _scanResult
 
-    private val _shipments = MutableStateFlow<List<Shipment>>(emptyList())
-    val shipments: StateFlow<List<Shipment>> = _shipments
+    // Состояния принтера
+    private val _printerConnectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    val printerConnectionState: StateFlow<ConnectionState> = _printerConnectionState
+
+    private val _printingState = MutableStateFlow(PrintingState.IDLE)
+    val printingState: StateFlow<PrintingState> = _printingState
 
     private lateinit var database: WarehouseDatabase
     private lateinit var networkManager: NetworkManager
-    private lateinit var printerAdapter: XprinterAdapter
+    private lateinit var printerManager: PrinterManager
     private lateinit var scannerAdapter: NewlandScannerAdapter
 
     fun initialize(
         database: WarehouseDatabase,
         networkManager: NetworkManager,
-        printerAdapter: XprinterAdapter,
+        printerManager: PrinterManager,
         scannerAdapter: NewlandScannerAdapter
     ) {
         this.database = database
         this.networkManager = networkManager
-        this.printerAdapter = printerAdapter
+        this.printerManager = printerManager
         this.scannerAdapter = scannerAdapter
+
+        // Подписываемся на состояния принтера
+        viewModelScope.launch {
+            printerManager.connectionState.collect { state ->
+                _printerConnectionState.value = state
+            }
+        }
+
+        viewModelScope.launch {
+            printerManager.printingState.collect { state ->
+                _printingState.value = state
+            }
+        }
+
         loadData()
     }
 
@@ -154,33 +175,24 @@ class WarehouseViewModel : ViewModel() {
 
     private suspend fun saveShipment(shipment: Shipment) {
         // TODO: Сохранить в базу данных
-        _shipments.value = _shipments.value + shipment
+        //_shipments.value = _shipments.value + shipment
         //networkManager.sendShipmentToServer(shipment)
     }
 
-    fun printReceptionLabel(product: Product) {
-        viewModelScope.launch {
-            val parsedData = processQRCode(product.qrCode)
-            val additionalInfo = mapOf(
-                "routeCard" to (parsedData.routeCard ?: ""),
-                "orderNumber" to (parsedData.orderNumber ?: ""),
-                "partNumber" to (parsedData.partNumber ?: ""),
-                "partName" to (parsedData.partName ?: product.name)
-            )
-
-            printerAdapter.printReceptionLabel(product, additionalInfo)
-        }
+    suspend fun printReceptionLabel(product: Product): Boolean {
+        return printerManager.printLabel(product)
     }
 
-    fun printShipmentLabel(item: TaskItem, quantity: Int) {
-        viewModelScope.launch {
-            printerAdapter.printPickingLabel(
-                itemName = item.productName,
-                quantity = quantity,
-                cellCode = item.storageLocation,
-                orderInfo = _currentTask.value?.name
-            )
-        }
+    suspend fun printShipmentLabel(item: TaskItem, quantity: Int): Boolean {
+        return printerManager.printShipmentLabel(item, quantity)
+    }
+
+    suspend fun connectPrinter(macAddress: String): Boolean {
+        return printerManager.connectToPrinter(macAddress)
+    }
+
+    suspend fun testPrint(): Boolean {
+        return printerManager.printTest()
     }
 
     // Методы для работы со сканером

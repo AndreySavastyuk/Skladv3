@@ -33,7 +33,11 @@ import com.example.warehouseapp.screens.*
 import com.example.warehouseapp.data.*
 import com.example.warehouseapp.network.*
 import com.example.warehouseapp.printer.*
-import com.example.warehouseapp.scanner.*
+import androidx.room.Room
+import com.example.warehouseapp.database.WarehouseDatabase
+import com.example.warehouseapp.scanner.BluetoothQRScanner
+import com.example.warehouseapp.scanner.CameraQRScanner
+import com.example.warehouseapp.scanner.NewlandScannerAdapter
 
 class MainActivity : ComponentActivity() {
     private lateinit var bluetoothAdapter: BluetoothAdapter
@@ -41,6 +45,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var bluetoothScanner: BluetoothQRScanner
     private lateinit var printerManager: PrinterManager
     private lateinit var networkManager: NetworkManager
+    private lateinit var database: WarehouseDatabase
+    private lateinit var newlandScanner: NewlandScannerAdapter
 
     private val requestBluetoothPermission = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -57,13 +63,26 @@ class MainActivity : ComponentActivity() {
         bluetoothScanner = BluetoothQRScanner(this)
         printerManager = PrinterManager(this)
         networkManager = NetworkManager(this)
+        newlandScanner = NewlandScannerAdapter(this)
+
+        // Initialize database
+        database = Room.databaseBuilder(
+            applicationContext,
+            WarehouseDatabase::class.java,
+            "warehouse_database"
+        ).build()
 
         // Request permissions
         requestPermissions()
 
         setContent {
             WarehouseAppTheme {
-                WarehouseApp()
+                WarehouseApp(
+                    database = database,
+                    networkManager = networkManager,
+                    printerManager = printerManager,
+                    scannerAdapter = newlandScanner
+                )
             }
         }
     }
@@ -86,9 +105,19 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WarehouseApp() {
+fun WarehouseApp(
+    database: WarehouseDatabase,
+    networkManager: NetworkManager,
+    printerManager: PrinterManager,
+    scannerAdapter: NewlandScannerAdapter
+) {
     val navController = rememberNavController()
     val viewModel: WarehouseViewModel = viewModel()
+
+    // Initialize ViewModel with dependencies
+    LaunchedEffect(Unit) {
+        viewModel.initialize(database, networkManager, printerManager, scannerAdapter)
+    }
 
     Scaffold { paddingValues ->
         NavHost(
