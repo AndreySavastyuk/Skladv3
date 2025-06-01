@@ -1,5 +1,7 @@
 package com.example.warehouseapp.printer
 
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.content.Context
 import android.graphics.*
 import android.util.Log
@@ -12,18 +14,18 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import net.posprinter.POSConnect
-import net.posprinter.IDeviceConnection
 import net.posprinter.IConnectListener
+import net.posprinter.IDeviceConnection
+import net.posprinter.POSConnect
 import net.posprinter.TSPLConst
 import net.posprinter.TSPLPrinter
 import java.text.SimpleDateFormat
 import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.suspendCoroutine
 import kotlin.coroutines.resume
 
 /**
@@ -37,7 +39,6 @@ class PrinterManager @Inject constructor(
     companion object {
         private const val TAG = "PrinterManager"
         private const val CONNECTION_TIMEOUT_MS = 10000L
-        private const val PRINTER_NAME = "Xprinter"
 
         // Размеры этикетки
         private const val LABEL_WIDTH_MM = 57.0
@@ -47,6 +48,7 @@ class PrinterManager @Inject constructor(
 
     private var deviceConnection: IDeviceConnection? = null
     private var tsplPrinter: TSPLPrinter? = null
+    private val bluetoothAdapter: BluetoothAdapter? = BluetoothAdapter.getDefaultAdapter()
 
     // Состояние подключения
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
@@ -58,11 +60,44 @@ class PrinterManager @Inject constructor(
 
     init {
         // Инициализация SDK
+        initializeSdk()
+    }
+
+    /**
+     * Инициализация SDK принтера
+     */
+    private fun initializeSdk() {
         try {
             POSConnect.init(context.applicationContext)
-            Log.d(TAG, "POSConnect SDK initialized")
+            Log.d(TAG, "POSConnect SDK initialized successfully")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize POSConnect SDK", e)
+        }
+    }
+
+    /**
+     * Получение списка спаренных принтеров
+     */
+    fun getPairedPrinters(): List<BluetoothDevice> {
+        return try {
+            bluetoothAdapter?.bondedDevices?.filter { device ->
+                try {
+                    val deviceName = device.name ?: ""
+                    val deviceAddress = device.address ?: ""
+
+                    // Фильтруем принтеры по имени или MAC-адресу
+                    deviceName.contains("Xprinter", ignoreCase = true) ||
+                            deviceName.contains("Printer", ignoreCase = true) ||
+                            deviceName.contains("V3BT", ignoreCase = true) ||
+                            deviceAddress.startsWith("DC:0D:30", ignoreCase = true)
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Security exception accessing device", e)
+                    false
+                }
+            }?.toList() ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting paired printers", e)
+            emptyList()
         }
     }
 
@@ -73,6 +108,9 @@ class PrinterManager @Inject constructor(
         try {
             _connectionState.value = ConnectionState.CONNECTING
             Log.d(TAG, "Attempting to connect to printer: $macAddress")
+
+            // Закрываем предыдущее соединение
+            disconnect()
 
             val connected = withTimeout(CONNECTION_TIMEOUT_MS) {
                 connectAsync(macAddress)
@@ -103,35 +141,71 @@ class PrinterManager @Inject constructor(
     }
 
     /**
-     * Асинхронное подключение
+     * Асинхронное подключение с использованием корутин
      */
-    private suspend fun connectAsync(macAddress: String): Boolean = suspendCoroutine { continuation ->
-        // Закрываем предыдущее соединение
-        deviceConnection?.close()
+    private suspend fun connectAsync(macAddress: String): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            try {
+                // Создаем новое Bluetooth соединение
+                deviceConnection = POSConnect.createDevice(POSConnect.DEVICE_TYPE_BLUETOOTH)
 
-        // Создаем новое соединение
-        deviceConnection = POSConnect.createDevice(POSConnect.DEVICE_TYPE_BLUETOOTH)
+                deviceConnection?.connect(macAddress, object : IConnectListener {
+                    override fun onStatus(code: Int, connectInfo: String?, message: String?) {
+                        Log.d(TAG, "Connection status: code=$code, info=$connectInfo, msg=$message")
 
-        deviceConnection?.connect(macAddress, object : IConnectListener {
-            override fun onStatus(code: Int, connectInfo: String?, message: String?) {
-                Log.d(TAG, "Connection status: code=$code, info=$connectInfo, msg=$message")
+                        when (code) {
+                            POSConnect.CONNECT_SUCCESS -> {
+                                Log.i(TAG, "Connection successful")
+                                // Инициализируем TSPL принтер
+                                deviceConnection?.let { connection ->
+                                    tsplPrinter = TSPLPrinter(connection)
+                                    if (continuation.isActive) {
+                                        continuation.resume(true)
+                                    }
+                                } ?: run {
+                                    Log.e(TAG, "Device connection is null after success")
+                                    if (continuation.isActive) {
+                                        continuation.resume(false)
+                                    }
+                                }
+                            }
+                            POSConnect.CONNECT_FAIL -> {
+                                Log.e(TAG, "Connection failed: $message")
+                                if (continuation.isActive) {
+                                    continuation.resume(false)
+                                }
+                            }
+                            POSConnect.CONNECT_INTERRUPT -> {
+                                Log.w(TAG, "Connection interrupted")
+                                if (continuation.isActive) {
+                                    continuation.resume(false)
+                                }
+                            }
+                            else -> {
+                                Log.w(TAG, "Unknown connection status: $code")
+                                if (continuation.isActive) {
+                                    continuation.resume(false)
+                                }
+                            }
+                        }
+                    }
+                }) ?: run {
+                    Log.e(TAG, "Failed to create connection")
+                    continuation.resume(false)
+                }
 
-                when (code) {
-                    POSConnect.CONNECT_SUCCESS -> {
-                        tsplPrinter = TSPLPrinter(deviceConnection)
-                        continuation.resume(true)
-                    }
-                    POSConnect.CONNECT_FAIL,
-                    POSConnect.CONNECT_INTERRUPT -> {
-                        continuation.resume(false)
-                    }
-                    else -> {
-                        continuation.resume(false)
-                    }
+                // Обработка отмены корутины
+                continuation.invokeOnCancellation {
+                    Log.d(TAG, "Connection cancelled")
+                    disconnect()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Exception during connection", e)
+                if (continuation.isActive) {
+                    continuation.resume(false)
                 }
             }
-        }) ?: continuation.resume(false)
-    }
+        }
 
     /**
      * Отключение от принтера
@@ -142,14 +216,14 @@ class PrinterManager @Inject constructor(
             deviceConnection = null
             tsplPrinter = null
             _connectionState.value = ConnectionState.DISCONNECTED
-            Log.d(TAG, "Printer disconnected")
+            Log.d(TAG, "Disconnected from printer")
         } catch (e: Exception) {
             Log.e(TAG, "Error during disconnect", e)
         }
     }
 
     /**
-     * Печать этикетки приемки
+     * Печать этикетки приемки для продукта
      */
     suspend fun printLabel(product: Product): Boolean = withContext(Dispatchers.IO) {
         if (_connectionState.value != ConnectionState.CONNECTED) {
@@ -162,35 +236,22 @@ class PrinterManager @Inject constructor(
 
             // Парсим QR данные
             val qrParts = product.qrCode.split("=")
-            val labelData = if (qrParts.size == 4) {
-                LabelData(
-                    partNumber = qrParts[2],
-                    description = qrParts[3],
-                    orderNumber = qrParts[1],
-                    location = product.storageLocation,
-                    quantity = product.quantity,
-                    qrData = product.qrCode,
-                    acceptanceDate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-                        .format(product.receivedDate)
-                )
-            } else {
-                LabelData(
-                    partNumber = product.name,
-                    description = product.name,
-                    orderNumber = product.orderNumber ?: "",
-                    location = product.storageLocation,
-                    quantity = product.quantity,
-                    qrData = product.qrCode,
-                    acceptanceDate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-                        .format(product.receivedDate)
-                )
-            }
+            val labelData = LabelData(
+                partNumber = if (qrParts.size >= 3) qrParts[2] else product.name,
+                description = if (qrParts.size >= 4) qrParts[3] else product.name,
+                orderNumber = if (qrParts.size >= 2) qrParts[1] else (product.orderNumber ?: ""),
+                location = product.storageLocation,
+                quantity = product.quantity,
+                qrData = product.qrCode,
+                acceptanceDate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
+                    .format(product.receivedDate),
+                labelType = "Приемка"
+            )
 
-            // Создаем изображение этикетки
-            val labelBitmap = createAcceptanceLabelBitmap(labelData)
-
-            // Печатаем
-            printBitmap(labelBitmap)
+            // Создаем и печатаем этикетку
+            val format = AcceptanceLabelFormat57x40()
+            val bitmap = format.createBitmap(labelData)
+            printBitmap(bitmap, format)
 
             _printingState.value = PrintingState.SUCCESS
             Log.i(TAG, "Label printed successfully")
@@ -229,11 +290,10 @@ class PrinterManager @Inject constructor(
                 labelType = "Комплектация"
             )
 
-            // Создаем изображение этикетки
-            val labelBitmap = createPickingLabelBitmap(labelData)
-
-            // Печатаем
-            printBitmap(labelBitmap)
+            // Создаем и печатаем этикетку
+            val format = PickingLabelFormat57x40()
+            val bitmap = format.createBitmap(labelData)
+            printBitmap(bitmap, format)
 
             _printingState.value = PrintingState.SUCCESS
             return@withContext true
@@ -249,193 +309,9 @@ class PrinterManager @Inject constructor(
     }
 
     /**
-     * Создание изображения этикетки приемки (формат 57x40 мм)
+     * Отправка изображения на принтер используя TSPL команды
      */
-    private fun createAcceptanceLabelBitmap(data: LabelData): Bitmap {
-        val widthPx = (LABEL_WIDTH_MM / 25.4 * DPI).toInt()
-        val heightPx = (LABEL_HEIGHT_MM / 25.4 * DPI).toInt()
-
-        val bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(Color.WHITE)
-
-        val margin = 8f
-
-        // Рамка этикетки
-        val borderPaint = Paint().apply {
-            color = Color.BLACK
-            style = Paint.Style.STROKE
-            strokeWidth = 2f
-        }
-        canvas.drawRect(1f, 1f, widthPx - 1f, heightPx - 1f, borderPaint)
-
-        // QR-код
-        val qrSize = 200
-        val qrBitmap = generateQRCode(data.qrData, qrSize)
-        canvas.drawBitmap(qrBitmap, 16f, 95f, null)
-
-        // Номер детали (крупно по центру)
-        val partNumberPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            typeface = Typeface.create("Arial", Typeface.BOLD)
-            textSize = 42f
-            textAlign = Paint.Align.CENTER
-        }
-
-        val centerX = widthPx / 2f
-        canvas.drawText(data.partNumber, centerX, 47f, partNumberPaint)
-
-        // Рамка ячейки
-        val cellBoxX = 233f
-        val cellBoxY = 177f
-        val cellBoxWidth = 195f
-        val cellBoxHeight = 119f
-        canvas.drawRect(cellBoxX, cellBoxY, cellBoxX + cellBoxWidth, cellBoxY + cellBoxHeight, borderPaint)
-
-        // Текст ячейки
-        val cellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 79f
-            typeface = Typeface.create("Arial", Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
-        }
-        val cellTextY = cellBoxY + (cellBoxHeight + cellPaint.textSize) / 2 - 6f
-        canvas.drawText(data.location, cellBoxX + cellBoxWidth / 2, cellTextY, cellPaint)
-
-        // Наименование детали
-        val namePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 18f
-            typeface = Typeface.create("Arial", Typeface.NORMAL)
-        }
-        canvas.drawText(data.description, 243f, 82f, namePaint)
-
-        // Номер заказа
-        val orderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 28f
-            typeface = Typeface.create("Arial", Typeface.NORMAL)
-        }
-        canvas.drawText(data.orderNumber, 223f, 154f, orderPaint)
-
-        // Количество
-        val quantityPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 12f
-            typeface = Typeface.create("Arial", Typeface.NORMAL)
-        }
-        data.quantity?.let { qty ->
-            canvas.drawText("Кол-во: $qty шт", 21f, 87f, quantityPaint)
-        }
-
-        // Дата
-        val datePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 10f
-            typeface = Typeface.create("Arial", Typeface.NORMAL)
-        }
-        data.acceptanceDate?.let { date ->
-            canvas.drawText("Дата: $date", 110f, 86f, datePaint)
-        }
-
-        return bitmap
-    }
-
-    /**
-     * Создание изображения этикетки комплектации
-     */
-    private fun createPickingLabelBitmap(data: LabelData): Bitmap {
-        val widthPx = (LABEL_WIDTH_MM / 25.4 * DPI).toInt()
-        val heightPx = (LABEL_HEIGHT_MM / 25.4 * DPI).toInt()
-
-        val bitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        canvas.drawColor(Color.WHITE)
-
-        val margin = 8f
-
-        // Рамка
-        val borderPaint = Paint().apply {
-            color = Color.BLACK
-            style = Paint.Style.STROKE
-            strokeWidth = 2f
-        }
-        canvas.drawRect(1f, 1f, widthPx - 1f, heightPx - 1f, borderPaint)
-
-        // Заголовок "КОМПЛЕКТАЦИЯ"
-        val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 18f
-            typeface = Typeface.create("Arial", Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
-        }
-        var yPos = margin + 16f
-        canvas.drawText("КОМПЛЕКТАЦИЯ", widthPx / 2f, yPos, headerPaint)
-
-        // Линия после заголовка
-        yPos += 6f
-        canvas.drawLine(margin, yPos, widthPx - margin, yPos, borderPaint)
-        yPos += 10f
-
-        // Информация о товаре
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.BLACK
-            textSize = 16f
-            typeface = Typeface.create("Arial", Typeface.NORMAL)
-        }
-
-        canvas.drawText("Товар: ${data.partNumber}", margin, yPos, textPaint)
-        yPos += 20f
-
-        canvas.drawText("Количество: ${data.quantity} шт", margin, yPos, textPaint)
-        yPos += 20f
-
-        canvas.drawText("Ячейка: ${data.location}", margin, yPos, textPaint)
-
-        // QR-код справа внизу
-        val qrSize = 100
-        val qrX = widthPx - qrSize - margin.toInt()
-        val qrY = heightPx - qrSize - margin.toInt()
-        val qrBitmap = generateQRCode(data.qrData, qrSize)
-        canvas.drawBitmap(qrBitmap, qrX.toFloat(), qrY.toFloat(), null)
-
-        return bitmap
-    }
-
-    /**
-     * Генерация QR-кода с поддержкой UTF-8
-     */
-    private fun generateQRCode(data: String, size: Int): Bitmap {
-        return try {
-            val writer = QRCodeWriter()
-            val hints = HashMap<EncodeHintType, Any>().apply {
-                put(EncodeHintType.CHARACTER_SET, "UTF-8")
-                put(EncodeHintType.ERROR_CORRECTION, ErrorCorrectionLevel.M)
-                put(EncodeHintType.MARGIN, 1)
-            }
-
-            val bitMatrix = writer.encode(data, BarcodeFormat.QR_CODE, size, size, hints)
-            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
-
-            for (x in 0 until size) {
-                for (y in 0 until size) {
-                    bitmap.setPixel(x, y, if (bitMatrix[x, y]) Color.BLACK else Color.WHITE)
-                }
-            }
-
-            bitmap
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to generate QR code", e)
-            Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
-                eraseColor(Color.WHITE)
-            }
-        }
-    }
-
-    /**
-     * Отправка изображения на принтер
-     */
-    private fun printBitmap(bitmap: Bitmap) {
+    private fun printBitmap(bitmap: Bitmap, format: LabelFormat) {
         val printer = tsplPrinter ?: throw PrinterException("Принтер не инициализирован")
 
         try {
@@ -443,7 +319,7 @@ class PrinterManager @Inject constructor(
 
             // Настройки принтера
             printer.cls()
-            printer.sizeMm(LABEL_WIDTH_MM, LABEL_HEIGHT_MM)
+            printer.sizeMm(format.widthMm, format.heightMm)
             printer.gapMm(2.0, 0.0)
             printer.speed(2.0)
             printer.density(8)
@@ -484,11 +360,13 @@ class PrinterManager @Inject constructor(
                 quantity = 999,
                 qrData = "TEST=ORDER=001=Тест печати",
                 acceptanceDate = SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault())
-                    .format(Date())
+                    .format(Date()),
+                labelType = "Тест"
             )
 
-            val bitmap = createAcceptanceLabelBitmap(testData)
-            printBitmap(bitmap)
+            val format = AcceptanceLabelFormat57x40()
+            val bitmap = format.createBitmap(testData)
+            printBitmap(bitmap, format)
 
             _printingState.value = PrintingState.SUCCESS
             return@withContext true

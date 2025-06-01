@@ -2,9 +2,11 @@ package com.example.warehouseapp.di
 
 import android.content.Context
 import androidx.room.Room
+import com.example.warehouseapp.database.ProductDao
 import com.example.warehouseapp.database.WarehouseDatabase
 import com.example.warehouseapp.network.NetworkManager
 import com.example.warehouseapp.printer.PrinterManager
+import com.example.warehouseapp.repository.WarehouseRepository
 import com.example.warehouseapp.scanner.NewlandBleManager
 import dagger.Module
 import dagger.Provides
@@ -31,7 +33,9 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideProductDao(database: WarehouseDatabase) = database.productDao()
+    fun provideProductDao(database: WarehouseDatabase): ProductDao {
+        return database.productDao()
+    }
 
     @Provides
     @Singleton
@@ -55,5 +59,14 @@ object AppModule {
         @ApplicationContext context: Context
     ): NewlandBleManager {
         return NewlandBleManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideWarehouseRepository(
+        productDao: ProductDao,
+        networkManager: NetworkManager
+    ): WarehouseRepository {
+        return WarehouseRepository(productDao, networkManager)
     }
 }

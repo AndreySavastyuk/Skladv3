@@ -411,27 +411,7 @@ class WarehouseViewModel @Inject constructor(
      * Получение списка спаренных принтеров
      */
     fun getPairedPrinters(): List<BluetoothDevice> {
-        return try {
-            val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-            bluetoothAdapter?.bondedDevices?.filter { device ->
-                try {
-                    val deviceName = device.name ?: ""
-                    val deviceAddress = device.address ?: ""
-
-                    // Фильтруем принтеры по имени или MAC-адресу
-                    deviceName.contains("Xprinter", ignoreCase = true) ||
-                            deviceName.contains("Printer", ignoreCase = true) ||
-                            deviceName.contains("V3BT", ignoreCase = true) ||
-                            deviceAddress.startsWith("DC:0D:30", ignoreCase = true)
-                } catch (e: SecurityException) {
-                    Log.e(TAG, "Security exception accessing device", e)
-                    false
-                }
-            }?.toList() ?: emptyList()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error getting paired printers", e)
-            emptyList()
-        }
+        return printerManager.getPairedPrinters()
     }
 
     /**
