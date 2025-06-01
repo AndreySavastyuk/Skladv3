@@ -1,5 +1,6 @@
 package com.example.warehouseapp.viewmodel
 
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.graphics.Bitmap
 import android.util.Log
@@ -218,7 +219,9 @@ class WarehouseViewModel @Inject constructor(
                         _syncStatus.value = SyncStatus.ERROR
                         Log.e(TAG, "Ошибка синхронизации: ${state.message}")
                     }
-                    else -> {}
+                    is SyncState.Loading -> {
+                        Log.d(TAG, "Синхронизация...")
+                    }
                 }
             }
         }
@@ -408,7 +411,27 @@ class WarehouseViewModel @Inject constructor(
      * Получение списка спаренных принтеров
      */
     fun getPairedPrinters(): List<BluetoothDevice> {
-        return printerManager.getPairedPrinters()
+        return try {
+            val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+            bluetoothAdapter?.bondedDevices?.filter { device ->
+                try {
+                    val deviceName = device.name ?: ""
+                    val deviceAddress = device.address ?: ""
+
+                    // Фильтруем принтеры по имени или MAC-адресу
+                    deviceName.contains("Xprinter", ignoreCase = true) ||
+                            deviceName.contains("Printer", ignoreCase = true) ||
+                            deviceName.contains("V3BT", ignoreCase = true) ||
+                            deviceAddress.startsWith("DC:0D:30", ignoreCase = true)
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Security exception accessing device", e)
+                    false
+                }
+            }?.toList() ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error getting paired printers", e)
+            emptyList()
+        }
     }
 
     /**

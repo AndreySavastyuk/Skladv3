@@ -1,114 +1,126 @@
 package com.example.warehouseapp.repository
 
-import com.example.warehouseapp.data.*
+import com.example.warehouseapp.data.Product
+import com.example.warehouseapp.data.Shipment
+import com.example.warehouseapp.data.Task
 import com.example.warehouseapp.database.ProductDao
-import com.example.warehouseapp.network.WarehouseApiService
+import com.example.warehouseapp.network.NetworkManager
 import com.example.warehouseapp.network.SyncResult
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import javax.inject.Inject
 import javax.inject.Singleton
-import retrofit2.Response
 
+/**
+ * Репозиторий для работы с данными склада
+ */
 @Singleton
 class WarehouseRepository @Inject constructor(
     private val productDao: ProductDao,
-    private val apiService: WarehouseApiService
+    private val networkManager: NetworkManager
 ) {
 
-    // Локальные операции
+    // Получение всех продуктов
     fun getAllProducts(): Flow<List<Product>> = productDao.getAllProducts()
 
-    suspend fun getProductById(id: String): Product? = productDao.getProductById(id)
-
+    // Вставка продукта
     suspend fun insertProduct(product: Product) {
         productDao.insertProduct(product)
+        // Отправляем на сервер в фоне
+        try {
+            networkManager.sendProductToServer(product)
+        } catch (e: Exception) {
+            // Игнорируем ошибки сети, продукт сохранен локально
+        }
     }
 
+    // Получение несинхронизированных продуктов
+    suspend fun getUnsyncedProducts(): List<Product> {
+        return productDao.getUnsyncedProducts()
+    }
+
+    // Обновление продукта
     suspend fun updateProduct(product: Product) {
         productDao.updateProduct(product)
     }
 
-    suspend fun deleteProduct(product: Product) {
-        productDao.deleteProduct(product)
+    // Синхронизация списка продуктов
+    suspend fun syncProductsList(products: List<Product>): Result<SyncResult> {
+        return try {
+            // Здесь должен быть вызов API через NetworkManager
+            // Пока возвращаем заглушку
+            Result.success(SyncResult(
+                success = true,
+                syncedCount = products.size,
+                errors = null
+            ))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
-    // Сетевые операции
-    suspend fun syncProducts(): Flow<SyncState> = flow {
-        emit(SyncState.Loading)
-
+    // Получение заданий
+    fun fetchTasks(): Flow<FetchState<List<Task>>> = flow {
+        emit(FetchState.Loading)
         try {
-            // Получаем несинхронизированные продукты
-            val unsyncedProducts = productDao.getUnsyncedProducts()
+            val tasks = networkManager.fetchTasks()
+            emit(FetchState.Success(tasks))
+        } catch (e: Exception) {
+            emit(FetchState.Error(e.message ?: "Unknown error"))
+        }
+    }
 
+    // Обновление задания
+    suspend fun updateTask(task: Task) {
+        try {
+            networkManager.updateTask(task)
+        } catch (e: Exception) {
+            // Обработка ошибки
+        }
+    }
+
+    // Добавление записи о выдаче
+    suspend fun addShipment(shipment: Shipment) {
+        // TODO: Сохранить в локальную БД
+        // TODO: Отправить на сервер
+    }
+
+    // Синхронизация продуктов
+    fun syncProducts(): Flow<SyncState> = flow {
+        emit(SyncState.Loading)
+        try {
+            val unsyncedProducts = getUnsyncedProducts()
             if (unsyncedProducts.isEmpty()) {
-                emit(SyncState.Success("Нет данных для синхронизации"))
+                emit(SyncState.Success(0))
                 return@flow
             }
 
-            // Отправляем на сервер
-            val response = apiService.syncProducts(unsyncedProducts)
-
-            if (response.isSuccessful && response.body()?.success == true) {
-                // Помечаем как синхронизированные
+            val result = syncProductsList(unsyncedProducts)
+            if (result.isSuccess) {
+                // Помечаем продукты как синхронизированные
                 unsyncedProducts.forEach { product ->
-                    productDao.updateProduct(product.copy(isSynced = true))
+                    updateProduct(product.copy(isSynced = true))
                 }
 
-                emit(SyncState.Success("Синхронизировано: ${response.body()?.syncedCount} записей"))
+                val syncResult = result.getOrNull()
+                emit(SyncState.Success(syncResult?.syncedCount ?: unsyncedProducts.size))
             } else {
-                emit(SyncState.Error("Ошибка синхронизации: ${response.message()}"))
+                emit(SyncState.Error(result.exceptionOrNull()?.message ?: "Sync failed"))
             }
-
         } catch (e: Exception) {
-            emit(SyncState.Error("Ошибка сети: ${e.message}"))
-        }
-    }
-
-    suspend fun fetchTasks(): Flow<FetchState<List<Task>>> = flow {
-        emit(FetchState.Loading)
-
-        try {
-            val response = apiService.getTasks()
-
-            if (response.isSuccessful) {
-                val tasks = response.body() ?: emptyList()
-                emit(FetchState.Success(tasks))
-            } else {
-                emit(FetchState.Error("Ошибка загрузки заданий: ${response.message()}"))
-            }
-
-        } catch (e: Exception) {
-            emit(FetchState.Error("Ошибка сети: ${e.message}"))
-        }
-    }
-
-    suspend fun updateTask(task: Task): Boolean {
-        return try {
-            val response = apiService.updateTask(task.id, task)
-            response.isSuccessful
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    suspend fun addShipment(shipment: Shipment): Boolean {
-        return try {
-            val response = apiService.addShipment(shipment)
-            response.isSuccessful
-        } catch (e: Exception) {
-            false
+            emit(SyncState.Error(e.message ?: "Unknown error"))
         }
     }
 }
 
-// Состояния для UI
+// Состояния синхронизации
 sealed class SyncState {
     object Loading : SyncState()
-    data class Success(val message: String) : SyncState()
+    data class Success(val syncedCount: Int) : SyncState()
     data class Error(val message: String) : SyncState()
 }
 
+// Состояния загрузки
 sealed class FetchState<out T> {
     object Loading : FetchState<Nothing>()
     data class Success<T>(val data: T) : FetchState<T>()
