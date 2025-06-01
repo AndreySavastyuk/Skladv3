@@ -2,6 +2,7 @@ package com.example.warehouseapp.viewmodel
 
 import android.bluetooth.BluetoothDevice
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.warehouseapp.data.*
@@ -15,6 +16,7 @@ import com.example.warehouseapp.scanner.NewlandBleManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.util.*
 import javax.inject.Inject
 
@@ -24,6 +26,11 @@ class WarehouseViewModel @Inject constructor(
     private val printerManager: PrinterManager,
     private val scannerManager: NewlandBleManager
 ) : ViewModel() {
+
+    companion object {
+        private const val TAG = "WarehouseViewModel"
+        private const val SYNC_INTERVAL_MS = 5 * 60 * 1000L // 5 минут
+    }
 
     // UI состояния
     private val _uiState = MutableStateFlow(WarehouseUiState())
@@ -61,6 +68,14 @@ class WarehouseViewModel @Inject constructor(
     private val _syncState = MutableStateFlow<SyncState?>(null)
     val syncState: StateFlow<SyncState?> = _syncState.asStateFlow()
 
+    // Состояние загрузки
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    // Статус синхронизации
+    private val _syncStatus = MutableStateFlow(SyncStatus.IDLE)
+    val syncStatus: StateFlow<SyncStatus> = _syncStatus.asStateFlow()
+
     // Mock данные для элементов заданий
     private val _taskItems = MutableStateFlow<Map<String, List<TaskItem>>>(emptyMap())
 
@@ -82,6 +97,9 @@ class WarehouseViewModel @Inject constructor(
         // Загружаем задания при инициализации
         loadTasks()
         loadMockTaskItems()
+
+        // Запускаем периодическую синхронизацию
+        startPeriodicSync()
     }
 
     // Загрузка заданий с сервера
@@ -95,6 +113,11 @@ class WarehouseViewModel @Inject constructor(
                     is FetchState.Success -> {
                         _tasks.value = state.data
                         _uiState.update { it.copy(isLoading = false) }
+
+                        // Загружаем элементы для каждого задания
+                        state.data.forEach { task ->
+                            loadTaskItemsFromServer(task.id)
+                        }
                     }
                     is FetchState.Error -> {
                         _uiState.update {
@@ -103,17 +126,143 @@ class WarehouseViewModel @Inject constructor(
                                 errorMessage = state.message
                             )
                         }
+                        // При ошибке используем mock-данные
+                        loadMockTasks()
                     }
                 }
             }
         }
     }
 
+    // Загрузка реальных заданий с сервера
+    fun loadTasksFromServer() {
+        viewModelScope.launch {
+            try {
+                _isLoading.value = true
+
+                repository.fetchTasks().collect { state ->
+                    when (state) {
+                        is FetchState.Success -> {
+                            if (state.data.isNotEmpty()) {
+                                _tasks.value = state.data
+
+                                // Загружаем элементы для каждого задания
+                                state.data.forEach { task ->
+                                    loadTaskItemsFromServer(task.id)
+                                }
+                            } else {
+                                // Если сервер не вернул задания, используем mock-данные
+                                loadMockTasks()
+                            }
+                        }
+                        is FetchState.Error -> {
+                            Log.e(TAG, "Ошибка загрузки заданий: ${state.message}")
+                            // При ошибке используем mock-данные
+                            loadMockTasks()
+                        }
+                        else -> {}
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка загрузки заданий", e)
+                loadMockTasks()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    // Загрузка элементов задания с сервера (заглушка)
+    private fun loadTaskItemsFromServer(taskId: String) {
+        // TODO: Реализовать загрузку элементов задания с сервера
+        // Пока используем mock-данные
+    }
+
+    // Загрузка mock заданий
+    private fun loadMockTasks() {
+        val mockTasks = listOf(
+            Task(
+                id = "task1",
+                name = "Заказ #001 - Сборка корпусов",
+                createdDate = Date(),
+                isCompleted = false,
+                isPaused = false,
+                isSynced = false
+            ),
+            Task(
+                id = "task2",
+                name = "Заказ #002 - Комплектация деталей",
+                createdDate = Date(),
+                isCompleted = false,
+                isPaused = true,
+                isSynced = false
+            )
+        )
+        _tasks.value = mockTasks
+    }
+
     // Синхронизация данных с сервером
     fun syncData() {
         viewModelScope.launch {
+            _syncStatus.value = SyncStatus.SYNCING
+
             repository.syncProducts().collect { state ->
                 _syncState.value = state
+
+                when (state) {
+                    is SyncState.Success -> {
+                        _syncStatus.value = SyncStatus.SUCCESS
+                        Log.i(TAG, "Синхронизация успешна: ${state.syncedCount} записей")
+                    }
+                    is SyncState.Error -> {
+                        _syncStatus.value = SyncStatus.ERROR
+                        Log.e(TAG, "Ошибка синхронизации: ${state.message}")
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    // Синхронизация несинхронизированных данных
+    fun syncPendingData() {
+        viewModelScope.launch {
+            try {
+                _syncStatus.value = SyncStatus.SYNCING
+
+                // Синхронизируем продукты
+                val unsyncedProducts = repository.getUnsyncedProducts()
+                if (unsyncedProducts.isNotEmpty()) {
+                    val result = repository.syncProductsList(unsyncedProducts)
+
+                    if (result.isSuccess) {
+                        // Отмечаем как синхронизированные
+                        unsyncedProducts.forEach { product ->
+                            repository.updateProduct(
+                                product.copy(isSynced = true)
+                            )
+                        }
+                        _syncStatus.value = SyncStatus.SUCCESS
+                    } else {
+                        _syncStatus.value = SyncStatus.ERROR
+                    }
+                }
+
+                // TODO: Добавить синхронизацию shipments и других данных
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Ошибка синхронизации", e)
+                _syncStatus.value = SyncStatus.ERROR
+            }
+        }
+    }
+
+    // Периодическая синхронизация
+    fun startPeriodicSync() {
+        viewModelScope.launch {
+            while (true) {
+                delay(SYNC_INTERVAL_MS)
+                syncPendingData()
             }
         }
     }
@@ -255,6 +404,20 @@ class WarehouseViewModel @Inject constructor(
         return printerManager.printTest()
     }
 
+    /**
+     * Получение списка спаренных принтеров
+     */
+    fun getPairedPrinters(): List<BluetoothDevice> {
+        return printerManager.getPairedPrinters()
+    }
+
+    /**
+     * Отключение от принтера
+     */
+    fun disconnectPrinter() {
+        printerManager.disconnect()
+    }
+
     // Методы сканера
     fun startScannerPairing() {
         scannerManager.generatePairingQrCode()
@@ -279,7 +442,7 @@ class WarehouseViewModel @Inject constructor(
     fun scannerBeepError() {
         viewModelScope.launch {
             scannerManager.beep(frequency = 1000, duration = 100, volume = 15)
-            kotlinx.coroutines.delay(150)
+            delay(150)
             scannerManager.beep(frequency = 1000, duration = 100, volume = 15)
         }
     }
@@ -317,6 +480,18 @@ class WarehouseViewModel @Inject constructor(
                     scannedQuantity = 2,
                     isCompleted = false
                 )
+            ),
+            "task2" to listOf(
+                TaskItem(
+                    id = "item3",
+                    taskId = "task2",
+                    productId = "СБ-123",
+                    productName = "Блок питания",
+                    storageLocation = "C3D4",
+                    requiredQuantity = 2,
+                    scannedQuantity = 0,
+                    isCompleted = false
+                )
             )
         )
         _taskItems.value = mockItems
@@ -325,6 +500,7 @@ class WarehouseViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         scannerManager.release()
+        printerManager.disconnect()
     }
 }
 
@@ -334,3 +510,11 @@ data class WarehouseUiState(
     val errorMessage: String? = null,
     val lastAddedProduct: Product? = null
 )
+
+// Статус синхронизации
+enum class SyncStatus {
+    IDLE,
+    SYNCING,
+    SUCCESS,
+    ERROR
+}
